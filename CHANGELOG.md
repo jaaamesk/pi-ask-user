@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- The single-select details pane is sized from what the highlighted option needs instead of a fixed preference (8 rows in the overlay, 12 inline), so a long option description is readable on a tall terminal instead of ending in an ellipsis while rows sit unused below it. When rows really are tight, the `Press \`Enter\` to select this option.` hint and the filter line give up their rows before any description text is cut, and a clipped pane says how many rows are missing (`… 4 more lines`) rather than a bare `…`, which read as if the whole description had fitted.
+
 ## [0.17.0](https://github.com/edlsh/pi-ask-user/releases/tag/v0.17.0) - 2026-10-19
 
 ### Changed

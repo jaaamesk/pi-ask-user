@@ -289,6 +289,25 @@ function createTheme() {
    };
 }
 
+/** Render the whole prompt as the overlay would show it on a terminal of `rows` lines. */
+async function renderPromptAt(rows: number, width: number, params: Record<string, unknown>): Promise<string> {
+   const tool = await setupTool();
+   let rendered = "";
+
+   await tool.execute("tool-call-id", params, undefined, undefined, {
+      hasUI: true,
+      ui: {
+         custom: async (factory: any) => {
+            const component = factory({ requestRender() { }, terminal: { rows } }, createTheme(), createKeybindings(), () => { });
+            rendered = component.render(width).join("\n");
+            return null;
+         },
+      },
+   });
+
+   return rendered;
+}
+
 function renderSingleSelectFromFactory(factory: unknown, width = 120): string {
    // The custom UI callback is untyped in the test harness; narrow only the surface exercised here.
    const createComponent = factory as unknown as (
@@ -1719,6 +1738,44 @@ describe("ask_user", () => {
       expect(result.isError).not.toBe(true);
       expect(rendered).toContain("## Alpha");
       expect(rendered).toContain("The alpha option keeps the rollout conservative.");
+   });
+
+   // Long enough that the option area has to grow for the tail to be readable at all.
+   const LONG_DETAIL =
+      "Use this when the change touches several files and you want the plan reviewed before anything is written to disk, because a wrong shape here costs a rebase.";
+   const LONGER_DETAIL = `${LONG_DETAIL} It also keeps the rollback story simple, since a plan reviewed in writing is cheaper to unwind than three commits and a squash, and it leaves a note your future self will actually read before changing the migration order again, which is how the last release broke staging twice.`;
+
+   function detailParams(detail: string) {
+      return {
+         question: "How should I land this change?",
+         context: "The branch is shared and the migration step fails, which is why the shape of the commit matters.",
+         options: [
+            { title: "Plan first", description: detail },
+            { title: "Just the edit", description: "Skips the review loop and reports a diff once the tests are green." },
+         ],
+      };
+   }
+
+   test("grows the details pane to fit a long description when the terminal has the rows", async () => {
+      const rendered = await renderPromptAt(40, 100, detailParams(LONG_DETAIL));
+
+      expect(rendered).toContain("costs a rebase.");
+      expect(rendered).toContain("Press `Enter` to select this option.");
+      expect(rendered).not.toContain("more line");
+   });
+
+   test("keeps a long description readable on a short terminal instead of clipping it", async () => {
+      const rendered = await renderPromptAt(16, 100, detailParams(LONG_DETAIL));
+
+      expect(rendered).toContain("costs a rebase.");
+   });
+
+   test("gives clipped detail rows to the description and says what is missing", async () => {
+      const rendered = await renderPromptAt(16, 100, detailParams(LONGER_DETAIL));
+
+      expect(rendered).toMatch(/\d+ more lines?/);
+      // The hint is chrome: it yields before any of the description is cut.
+      expect(rendered).not.toContain("Press `Enter` to select this option.");
    });
 
    test("keeps wide single-select prompts in one column when requested", async () => {

@@ -909,6 +909,32 @@ class WrappedSingleSelectList implements Component {
       this.cachedLines = undefined;
    }
 
+   /**
+    * Rows the highlighted option needs to be read in full. The prompt used to size the option
+    * area from a fixed preference no matter how tall the terminal was, so a long description was
+    * clipped to an ellipsis while rows sat unused. Layout asks this instead.
+    */
+   rowsForSelection(width: number): number {
+      const filtered = this.getFilteredOptions();
+      if (filtered.length === 0) return 0;
+
+      const splitPane = this.getSplitPaneWidths(width);
+      const listRows = renderSingleSelectRows({
+         options: filtered,
+         selectedIndex: this.selectedIndex,
+         width: splitPane ? splitPane.left : width,
+         allowFreeform: this.allowFreeform,
+         allowComment: this.allowComment,
+         commentEnabled: this.commentEnabled,
+         hideDescriptions: Boolean(splitPane),
+      }).filter((row) => row.selected).length;
+      const previewRows = splitPane
+         ? this.buildPreviewLines(splitPane.right, filtered, Number.MAX_SAFE_INTEGER).length
+         : 0;
+
+      return Math.max(listRows, previewRows);
+   }
+
    private getFilteredOptions(): QuestionOption[] {
       return fuzzyFilter(this.options, this.searchQuery, (option) => `${option.title} ${option.description ?? ""}`);
    }
@@ -1044,6 +1070,9 @@ class WrappedSingleSelectList implements Component {
       const mdTheme = safeMarkdownTheme();
 
       let md = "";
+      // Kept apart from the description so a tight viewport spends its rows on the description
+      // instead of cutting the description off mid-sentence.
+      let chrome = "";
 
       if (this.isCommentToggleRow(this.selectedIndex, filteredOptions)) {
          md += "## Additional context\n\n";
@@ -1067,33 +1096,38 @@ class WrappedSingleSelectList implements Component {
             } else {
                md += "*No additional details provided for this option.*\n";
             }
-            md += `\n---\n\nPress \`Enter\` to select this option.\n`;
+            chrome = `\n---\n\nPress \`Enter\` to select this option.\n`;
             if (this.searchQuery) {
-               md += `\n> Filter: \`${this.searchQuery}\`\n`;
+               chrome += `\n> Filter: \`${this.searchQuery}\`\n`;
             }
          }
       }
 
-      let lines: string[];
-      if (mdTheme) {
-         const mdComponent = new Markdown(md.trim(), 0, 0, mdTheme);
-         lines = mdComponent.render(width);
-      } else {
-         lines = [];
-         for (const line of wrapTextWithAnsi(md.trim(), Math.max(10, width))) {
-            lines.push(truncateToWidth(line, width, ""));
-         }
-      }
+      const renderMarkdown = (text: string): string[] => {
+         if (!text.trim()) return [];
+         if (mdTheme) return new Markdown(text.trim(), 0, 0, mdTheme).render(width);
+         return wrapTextWithAnsi(text.trim(), Math.max(10, width)).map((line) => truncateToWidth(line, width, ""));
+      };
 
-      while (lines.length > 0 && lines[lines.length - 1]?.trim() === "") {
-         lines.pop();
-      }
+      const dropTrailingBlanks = (rendered: string[]): string[] => {
+         while (rendered.length > 0 && rendered[rendered.length - 1]?.trim() === "") rendered.pop();
+         return rendered;
+      };
+
+      // The description wins: its rows come first, and the hint is shown only while they fit.
+      const coreLines = dropTrailingBlanks(renderMarkdown(md));
+      const chromeLines = dropTrailingBlanks(renderMarkdown(chrome));
+      const lines = coreLines.length + chromeLines.length <= maxLines
+         ? [...coreLines, ...chromeLines]
+         : coreLines;
 
       if (lines.length <= maxLines) return lines;
       if (maxLines === 1) return [truncateToWidth(this.theme.fg("dim", "…"), width, "")];
 
+      // Say how much is missing: a bare ellipsis reads as if the whole text fitted.
       const visibleLines = lines.slice(0, maxLines - 1);
-      visibleLines.push(truncateToWidth(this.theme.fg("dim", "…"), width, ""));
+      const hidden = lines.length - (maxLines - 1);
+      visibleLines.push(truncateToWidth(this.theme.fg("dim", `… ${hidden} more line${hidden === 1 ? "" : "s"}`), width, ""));
       return visibleLines;
    }
 
@@ -1387,7 +1421,7 @@ class AskComponent extends Container {
       }
 
       if (this.mode === "select" && !this.allowMultiple) {
-         this.ensureSingleSelectList().setMaxVisibleRows(12);
+         this.ensureSingleSelectList().setMaxVisibleRows(Math.max(12, this.modeContentRows(innerWidth)));
       }
 
       return this.renderInlineLayout(width, innerWidth);
@@ -1452,7 +1486,7 @@ class AskComponent extends Container {
             const promptMinRows = promptLines.length > 0 ? 1 : 0;
             const maximumModeRows = Math.max(0, promptAndModeRows - promptMinRows);
             const modeMinRows = Math.min(this.getMinimumModeRows(), maximumModeRows);
-            modeBudget = Math.min(this.getPreferredModeRows(), maximumModeRows);
+            modeBudget = Math.min(this.modeContentRows(innerWidth), maximumModeRows);
             modeBudget = Math.max(modeMinRows, modeBudget);
             promptBudget = promptAndModeRows - modeBudget;
 
@@ -1572,6 +1606,15 @@ class AskComponent extends Container {
       if (this.mode === "freeform") return 10;
       if (this.mode === "comment") return 11;
       return 8;
+   }
+
+   /**
+    * Rows the option area wants: never less than the preference, and more when the highlighted
+    * option needs them to be readable. Bounded later by the rows the viewport can spare.
+    */
+   private modeContentRows(width: number): number {
+      if (this.mode !== "select" || this.allowMultiple) return this.getPreferredModeRows();
+      return Math.max(this.getPreferredModeRows(), this.ensureSingleSelectList().rowsForSelection(width));
    }
 
    private renderModeLines(width: number, budget: number): string[] {
