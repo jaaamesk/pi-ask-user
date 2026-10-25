@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- The open prompt is published on a `globalThis` registry (`Symbol.for("pi.prompt-bridge.v1")`, in `bridge.ts`) together with a settle function that runs the same handlers `Enter` runs, so another extension in the same Pi process can answer it from elsewhere: a phone through Discord, say. Nothing is answered, cancelled, or timed out by the bridge itself, and the prompt component stays the single source of truth, so answering at the desk works unchanged whether or not anything is listening. Each question of a 2-4 question call is published as its own prompt with its position, and reaching the review page publishes a review prompt that submits or names a question to redo. A question with no options is not covered: that call opens pi's own input dialog rather than this component, and no outsider can answer it.
+
 ### Fixed
 
 - The single-select details pane is sized from what the highlighted option needs instead of a fixed preference (8 rows in the overlay, 12 inline), so a long option description is readable on a tall terminal instead of ending in an ellipsis while rows sit unused below it. When rows really are tight, the `Press \`Enter\` to select this option.` hint and the filter line give up their rows before any description text is cut, and a clipped pane says how many rows are missing (`… 4 more lines`) rather than a bare `…`, which read as if the whole description had fitted.

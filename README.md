@@ -269,6 +269,28 @@ A batch publishes nothing until the user submits it. Then each answered question
 
 Set `PI_ASK_USER_EMIT_FULL_EVENTS=true` (or `1`, `yes`, `on`), or `"emitFullEvents": true` in `ask-user.json`, to restore the full payloads — `context`, the offered `options` on cancel, and the complete `response` including selections, comment, and freeform text. Leave it unset unless another extension you trust needs the answer itself; the full response is always available to the agent through the tool result's `details`.
 
+## Answering a prompt from another extension
+
+The prompt you are looking at is published while it is open, on a registry at
+`globalThis[Symbol.for("pi.prompt-bridge.v1")]`, with a settle function that runs the same
+handlers `Enter` runs. That is the whole contract: another extension in the same Pi process
+can offer the same question somewhere else — a phone over Discord, in the case this fork
+exists for — and your answer arrives as though you had typed it.
+
+Nothing else changes. The prompt component remains the single source of truth, both surfaces
+are live at once, the first answer wins, and with nothing listening the behaviour is exactly
+upstream's. The bridge never answers, cancels, or times anything out; the caller's `timeout`
+still closes the question whether or not anyone is elsewhere.
+
+Each question of a multi-question call is published with its `page` (`{ index, total }`) and
+the call's heading, and reaching the review page publishes a review prompt that either
+submits or names a question to redo, because a phone has no tabs to flip back through.
+
+What is **not** covered: a question with no options. That call opens pi's own input dialog
+instead of this component, and no extension outside pi can answer it, so it stays a
+keyboard-only question. `bridge.ts` carries the table of what can be answered, and
+`bridge.test.ts` proves it against the real prompt component.
+
 ## Known limitations
 
 - **Overlays cannot draw over inline images** ([#8](https://github.com/edlsh/pi-ask-user/issues/8)). Pi-TUI's overlay compositor skips rows occupied by terminal images (Kitty/iTerm2 graphics), so an `ask_user` overlay that intersects an image is partially or fully invisible. This must be fixed upstream in pi-tui (`compositeLineAt` returns image rows unchanged). Until then, `displayMode: "inline"` (or `PI_ASK_USER_DISPLAY_MODE=inline`) sidesteps the overlay compositor entirely and should keep the prompt visible.

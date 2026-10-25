@@ -8,6 +8,7 @@ const packed = JSON.parse(execFileSync("npm", ["pack", "--dry-run", "--json", "-
 const [tarball] = Array.isArray(packed) ? packed : Object.values(packed);
 const expectedFiles = [
   "LICENSE",
+  "bridge.ts",
   "README.md",
   "index.ts",
   "settings.ts",

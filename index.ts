@@ -57,6 +57,17 @@ import {
    textSheet,
 } from "./tern";
 import { loadAskUserSettings } from "./settings";
+import {
+   PROMPT_SOURCE,
+   currentPromptScope,
+   openPrompt,
+   openPromptIn,
+   withPromptScope,
+   type PromptAnswer,
+   type PromptHandle,
+   type PromptInfo,
+   type PromptPage,
+} from "./bridge";
 
 import { createRequire } from "node:module";
 const _require = createRequire(import.meta.url);
@@ -1322,6 +1333,12 @@ class AskComponent extends Container {
       }
    }
 
+   /** The remote-answer door: this question, published to whoever is listening. */
+   private promptHandle?: PromptHandle;
+   private promptSignature = "";
+   private promptBatched = false;
+   private promptMeta?: { heading?: string; page?: PromptPage };
+
    constructor(
       question: string,
       context: string | undefined,
@@ -1337,6 +1354,7 @@ class AskComponent extends Container {
       keybindings: KeybindingsManager,
       shortcuts: ResolvedAskShortcuts,
       onDone: (result: AskUIResult | null) => void,
+      private readonly deadlineAt?: number,
    ) {
       super();
 
@@ -1353,7 +1371,15 @@ class AskComponent extends Container {
       this.theme = theme;
       this.keybindings = keybindings;
       this.shortcuts = shortcuts;
-      this.onDone = onDone;
+      // Closing here rather than in an unmount hook: this is the one path every ending
+      // goes through, cancel included, and a prompt left published reads as a question
+      // nothing can answer.
+      this.onDone = (result) => {
+         // A batch page outlives its first answer: navigating back to it has to offer it
+         // again, and the run's own scope closes it however the batch ends.
+         if (!this.promptBatched) this.promptHandle?.close();
+         onDone(result);
+      };
 
       // Layout skeleton
       this.addChild(new BoxBorderTop(
@@ -1405,6 +1431,88 @@ class AskComponent extends Container {
       } else {
          this.showSelectMode();
       }
+      this.publishPrompt();
+   }
+
+   /** What a remote surface needs to render this question, in plain data. */
+   private promptSnapshot(): Omit<PromptInfo, "id" | "answered"> {
+      const editorMode = this.mode === "freeform" || this.mode === "comment";
+      const heading = this.promptMeta?.heading;
+      const page = this.promptMeta?.page;
+      return {
+         source: PROMPT_SOURCE,
+         kind: editorMode ? "freeform" : "select",
+         question: this.question,
+         ...(this.context ? { context: this.context } : {}),
+         ...(heading ? { heading } : {}),
+         ...(page ? { page } : {}),
+         // In the editor there is nothing to choose, and offering options a remote
+         // answer could not apply is worse than offering none.
+         options: editorMode ? [] : this.options.map((option) => ({
+            title: option.title,
+            ...(option.description ? { description: option.description } : {}),
+         })),
+         allowMultiple: this.allowMultiple,
+         allowFreeform: this.allowFreeform,
+         ...(this.deadlineAt ? { deadlineAt: this.deadlineAt } : {}),
+      };
+   }
+
+   private publishPrompt(): void {
+      this.promptSignature = `${this.mode}|${this.options.length}`;
+      this.promptHandle = openPrompt(this.promptSnapshot(), (value) => this.answerPrompt(value));
+   }
+
+   /**
+    * Keep the published question in step with the widget. Only the mode (options, or the
+    * editor behind a custom answer) and the option count can differ from what was
+    * published, and both change in exactly one place each, so this is called from those
+    * places rather than from every frame. A pi-tern host presents the prompt natively and
+    * may never call render(), which is the other reason not to hang it off rendering.
+    */
+   private refreshPrompt(force = false): void {
+      if (!this.promptHandle) return;
+      const signature = `${this.mode}|${this.options.length}`;
+      if (!force && signature === this.promptSignature) return;
+      this.promptSignature = signature;
+      this.promptHandle.update(this.promptSnapshot());
+   }
+
+   /** Label the question as one of several, for a remote surface addressing them. */
+   setPromptMeta(heading: string | undefined, page: PromptPage): void {
+      this.promptBatched = true;
+      this.promptMeta = { ...(heading ? { heading } : {}), page };
+      this.refreshPrompt(true);
+   }
+
+   /** The batch came back to this question, so a remote surface may answer it again. */
+   reopenPrompt(): void {
+      this.promptHandle?.reopen();
+   }
+
+   /**
+    * An answer from a remote surface, applied the way the keyboard applies it: into the
+    * handlers `Enter` runs, so the response shape and the caller's `onUpdate` behave as
+    * they do at the desk. Returns false when the answer names nothing this question can
+    * take, so the prompt stays answerable. A remote answer skips the optional comment
+    * step, because there is no second round-trip to ask for it.
+    */
+   private answerPrompt(value: PromptAnswer): boolean {
+      if (value.cancel) {
+         this.onDone(null);
+         return true;
+      }
+      if (value.text !== undefined) {
+         const inEditor = this.mode === "freeform" || this.mode === "comment";
+         if (!inEditor && !this.allowFreeform) return false;
+         if (!inEditor) this.showFreeformMode();
+         this.handleEditorSubmit(value.text);
+         return true;
+      }
+      const known = (value.titles ?? []).filter((title) => this.options.some((option) => option.title === title));
+      if (known.length === 0) return false;
+      this.handleSelectionSubmit(this.allowMultiple ? known : [known[0]!], false);
+      return true;
    }
 
    override invalidate(): void {
@@ -2070,6 +2178,7 @@ class AskComponent extends Container {
       }
 
       this.mode = "select";
+      this.refreshPrompt();
       this.pendingSelections = [];
       this.modeContainer.clear();
 
@@ -2090,6 +2199,7 @@ class AskComponent extends Container {
       }
 
       this.mode = "freeform";
+      this.refreshPrompt();
       this.modeContainer.clear();
 
       const editor = this.ensureEditor();
@@ -2111,6 +2221,7 @@ class AskComponent extends Container {
       }
 
       this.mode = "comment";
+      this.refreshPrompt();
       this.modeContainer.clear();
 
       const editor = this.ensureEditor();
@@ -2254,6 +2365,8 @@ class BatchAskComponent implements Component {
    private tabs: QuestionTabs = { tabs: [], tab: "q0" };
    private reviewScrollOffset = 0;
    private reviewMaxScrollOffset = 0;
+   private reviewPrompt?: PromptHandle;
+   private readonly promptScope = currentPromptScope();
    private _focused = false;
 
    constructor(
@@ -2264,8 +2377,15 @@ class BatchAskComponent implements Component {
       private keybindings: KeybindingsManager,
       private onDone: (answers: BatchAnswer[] | null) => void,
       private heading?: string,
+      private readonly deadlineAt?: number,
    ) {
       this.answers = questions.map(() => undefined);
+      // A remote answer that ends the batch must not leave the review prompt published.
+      const settle = this.onDone;
+      this.onDone = (answers) => {
+         this.closeReviewPrompt();
+         settle(answers);
+      };
       this.pages = questions.map((entry, index) => new AskComponent(
          entry.question,
          entry.context,
@@ -2281,7 +2401,13 @@ class BatchAskComponent implements Component {
          keybindings,
          settings.shortcuts,
          (result) => this.handlePageDone(index, result),
+         this.deadlineAt,
       ));
+      // Each page is its own prompt, so one question of a batch can be answered from
+      // either surface while the terminal chrome stays honest about what is left.
+      for (const [index, page] of this.pages.entries()) {
+         page.setPromptMeta(heading, { index: index + 1, total: questions.length });
+      }
       this.updateChrome();
    }
 
@@ -2347,7 +2473,10 @@ class BatchAskComponent implements Component {
       this.confirmingSkips = false;
       this.reviewScrollOffset = 0;
       const next = this.pages[target];
-      if (next) next.focused = this._focused;
+      if (next) {
+         next.focused = this._focused;
+         next.reopenPrompt();
+      }
       this.updateChrome();
       this.tui.requestRender();
    }
@@ -2375,6 +2504,57 @@ class BatchAskComponent implements Component {
          ...(this.heading ? { heading: this.heading } : {}),
       };
       for (const page of this.pages) page.setNativeTabs(this.tabs, (id) => this.goToTab(id));
+      this.publishReviewPrompt();
+   }
+
+   /**
+    * The review page, published. A phone has no tabs to flip back through, so the remote
+    * form of the last look keeps the one thing the review page is for: send, or name the
+    * question to redo.
+    */
+   private publishReviewPrompt(): void {
+      if (this.current !== this.questions.length) {
+         this.closeReviewPrompt();
+         return;
+      }
+      const summary = this.questions
+         .map((entry, index) =>
+            `${index + 1}. ${entry.question}\n   ${this.answers[index] ? formatResponseSummary(this.answers[index]!) : "(no answer)"}`)
+         .join("\n");
+      const draft = {
+         kind: "review" as const,
+         question: this.heading ?? "Ready to send",
+         context: summary,
+         options: [],
+         allowMultiple: false,
+         allowFreeform: false,
+         ...(this.deadlineAt ? { deadlineAt: this.deadlineAt } : {}),
+      };
+      if (this.reviewPrompt) {
+         this.reviewPrompt.update(draft);
+         return;
+      }
+      this.reviewPrompt = openPromptIn(this.promptScope, { ...draft, source: PROMPT_SOURCE }, (value) => {
+         if (value.cancel) {
+            this.onDone(null);
+            return true;
+         }
+         if (value.back !== undefined) {
+            const target = value.back - 1;
+            if (target < 0 || target >= this.questions.length) return false;
+            this.goTo(target);
+            return true;
+         }
+         // With questions still unanswered this asks to confirm the skips instead of
+         // submitting, which is what Enter does here.
+         this.submitReview();
+         return true;
+      });
+   }
+
+   private closeReviewPrompt(): void {
+      this.reviewPrompt?.close();
+      this.reviewPrompt = undefined;
    }
 
    /** A native tab (`q<index>` or `review`). */
@@ -2748,6 +2928,7 @@ async function runCustomPrompt<T>(ui: ExtensionUIContext, request: CustomPromptR
    let customTimer: ReturnType<typeof setTimeout> | undefined;
    let onCustomAbort: (() => void) | undefined;
    let customCompleted = false;
+   let closePrompts: (() => void) | undefined;
    let hasAnnouncedHide = false;
    try {
       const customFactory = (tui: TUI, theme: Theme, keybindings: KeybindingsManager, done: (result: T | null) => void) => {
@@ -2767,7 +2948,11 @@ async function runCustomPrompt<T>(ui: ExtensionUIContext, request: CustomPromptR
             customTimer = setTimeout(() => complete(null), timeout);
          }
 
-         return request.createComponent(tui, theme, keybindings, complete);
+         // Prompts published while the component tree is built belong to this run, so
+         // none of them outlive it however the run ends.
+         const [component, close] = withPromptScope(() => request.createComponent(tui, theme, keybindings, complete));
+         closePrompts = close;
+         return component;
       };
 
       // Register a raw terminal input listener for the overlay-toggle key so the
@@ -2811,6 +2996,7 @@ async function runCustomPrompt<T>(ui: ExtensionUIContext, request: CustomPromptR
       throw error instanceof Error ? error : new Error(String(error));
    } finally {
       customCompleted = true;
+      closePrompts?.();
       if (customTimer !== undefined) clearTimeout(customTimer);
       if (onCustomAbort) signal?.removeEventListener("abort", onCustomAbort);
       removeOverlayInputListener?.();
@@ -2997,7 +3183,7 @@ async function executeBatch(
          displayMode: settings.displayMode,
          overlayToggle: settings.shortcuts.overlayToggle,
          createComponent: (tui, theme, keybindings, complete) =>
-            new BatchAskComponent(questions, settings, tui, theme, keybindings, complete, heading),
+            new BatchAskComponent(questions, settings, tui, theme, keybindings, complete, heading, deadline),
          fallback: () => askBatchViaDialogs(ctx.ui, questions, settings.allowComment, batch.signal, deadline, heading),
       }));
    } finally {
@@ -3272,6 +3458,7 @@ export default function(pi: ExtensionAPI) {
             details: { question, context: normalizedContext, options, response: null, cancelled: false },
          });
 
+         const deadlineAt = timeout && timeout > 0 ? Date.now() + timeout : undefined;
          const result = await whileBlocked(pi, () => runCustomPrompt<AskUIResult>(ctx.ui, {
             signal,
             timeout,
@@ -3292,6 +3479,7 @@ export default function(pi: ExtensionAPI) {
                keybindings,
                settings.shortcuts,
                complete,
+               deadlineAt,
             ),
             fallback: () => askViaDialogs(
                ctx.ui,

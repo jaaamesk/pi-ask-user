@@ -35,6 +35,7 @@
   },
   "files": [
     "index.ts",
+    "bridge.ts",
     "settings.ts",
     "single-select-layout.ts",
     "tern.ts",
