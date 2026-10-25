@@ -1,5 +1,28 @@
 # pi-ask-user
 
+> **This is a fork** of [edlsh/pi-ask-user](https://github.com/edlsh/pi-ask-user), kept because
+> it has three changes upstream does not:
+>
+> - option descriptions are sized from what they need, so a long one is readable instead of
+>   ending in an ellipsis while empty rows sit below it
+> - a single question with no options is a prompt like any other, not pi's plain input dialog
+> - the open prompt is published so another extension can answer it remotely — see
+>   [Answering a prompt from another extension](#answering-a-prompt-from-another-extension)
+>
+> Upstream is untouched: no pull request has been opened, and nothing has been written to
+> `edlsh/pi-ask-user`.
+>
+> Install this fork:
+>
+> ```bash
+> pi remove npm:pi-ask-user                            # only if the upstream package is installed
+> pi install git:github.com/jaaamesk/pi-ask-user@main
+> ```
+>
+> `@main` keeps tracking the fork, and `pi update --extensions` pulls new commits. A tag or
+> commit hash pins it instead, and updates will not move it. To take in upstream's work:
+> `git fetch upstream && git merge upstream/main`.
+
 A Pi package that adds an interactive `ask_user` tool for collecting user decisions during an agent run.
 
 ## Demo
@@ -49,8 +72,11 @@ See: `skills/ask-user/references/ask-user-skill-extension-spec.md`.
 ## Install
 
 ```bash
-pi install npm:pi-ask-user
+pi install git:github.com/jaaamesk/pi-ask-user@main
 ```
+
+For the upstream package without this fork's changes: `pi install npm:pi-ask-user`. If both are
+installed you get two `ask_user` tools, so remove one.
 
 ## Tool name
 
