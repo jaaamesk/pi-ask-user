@@ -167,10 +167,7 @@ test("the loser of a race between two surfaces is told it lost", async () => {
    expect(result.details?.response?.selections).toEqual(["Canary"]);
 });
 
-// Skipped because it documents a gap rather than a regression: a single question with no
-// options never reaches this component, it opens pi's own input dialog, which nothing
-// outside pi can answer. See the freeform row of the table in bridge.ts's doc comment.
-test.skip("a question with no options is answered with text", async () => {
+test("a question with no options is a prompt too, not a pi dialog", async () => {
    const { done } = await openAsk({ question: "How often should the report run?" });
    const prompt = await waitForPrompt(about("How often"), "the freeform question");
 

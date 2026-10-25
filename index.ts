@@ -2737,6 +2737,16 @@ async function askViaDialogs(
    if (dialogOpts?.signal?.aborted) return null;
    const prompt = context ? `${question}\n\nContext:\n${context}` : question;
 
+   // Nothing to choose from, so ask directly. Going through the select below would open a
+   // menu with one entry in it just to be told to type an answer.
+   if (options.length === 0) {
+      const answerOpts = dialogStageOptions(dialogOpts, deadline);
+      if (answerOpts === null) return null;
+      const answer = await ui.input(prompt, "Type your answer...", answerOpts) as string | undefined;
+      if (dialogOpts?.signal?.aborted || isCancelledInput(answer)) return null;
+      return createFreeformResponse(answer);
+   }
+
    if (allowMultiple) {
       const optionList = formatOptionsForMessage(options);
       const selectionOpts = dialogStageOptions(dialogOpts, deadline);
@@ -3433,26 +3443,10 @@ export default function(pi: ExtensionAPI) {
             );
          }
 
-         if (options.length === 0) {
-            const prompt = normalizedContext ? `${question}\n\nContext:\n${normalizedContext}` : question;
-            const answer = await whileBlocked(pi, () => ctx.ui.input(prompt, "Type your answer...", dialogOpts));
-            const response = signal?.aborted ? null : createFreeformResponse(answer);
-
-            if (!response) {
-               events.cancelled(subject);
-               return {
-                  content: [{ type: "text", text: "User cancelled the question" }],
-                  details: { question, context: normalizedContext, options, response: null, cancelled: true } as AskToolDetails,
-               };
-            }
-
-            events.answered(subject, response);
-            return {
-               content: [{ type: "text", text: `User answered: ${formatResponseSummary(response)}` }],
-               details: { question, context: normalizedContext, options, response, cancelled: false } as AskToolDetails,
-            };
-         }
-
+         // A question with no options opens in the component's own editor rather than in
+         // pi's input dialog, so it is a prompt like any other: shown with its context and
+         // help line, and answerable from whatever surface is listening. Hosts without a
+         // custom UI still get pi's dialog, through the fallback below.
          onUpdate?.({
             content: [{ type: "text", text: "Waiting for user input..." }],
             details: { question, context: normalizedContext, options, response: null, cancelled: false },

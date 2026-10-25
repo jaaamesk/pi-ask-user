@@ -23,14 +23,14 @@
  *   options, custom answer allowed      yes   text answer switches the widget to its editor
  *   multi-select                        yes   one answer naming several titles
  *   2-4 questions in one call           yes   one prompt per question, then a review step
- *   no options (freeform only)          NO    the tool opens pi's own input dialog here,
- *                                             bypassing this component entirely, and that
- *                                             dialog cannot be answered from outside pi
+ *   no options (freeform only)          yes   same widget a batch uses for an option-less
+ *                                             question; pi's own input dialog is still what
+ *                                             a host without a custom UI gets
  *
- * The gap is the ask_user call the model reaches for when it wants a sentence back, which
- * is exactly the kind of question worth answering from a phone, so it is worth knowing
- * about rather than discovering. Closing it means routing that call through the same
- * freeform widget a batch already uses for an option-less question.
+ * That last row used to be the gap: the call opened pi's input dialog instead of a prompt,
+ * and no extension outside pi can answer one. It matters because it is the call the model
+ * reaches for when it wants a sentence back, which is exactly the kind of question worth
+ * answering from a phone.
  */
 
 const BRIDGE_SYMBOL = Symbol.for("pi.prompt-bridge.v1");

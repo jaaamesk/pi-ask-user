@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { getEventListeners } from "node:events";
 import type { StringEnumBuilder } from "./index";
 import { NATIVE_COMPONENT, type TernContext, type TernEvent, type TernNode } from "./tern";
+import { getBridge, type PromptAnswer } from "./bridge";
 
 let editorInputs: string[] = [];
 let editorText = "";
@@ -308,6 +309,26 @@ async function renderPromptAt(rows: number, width: number, params: Record<string
    return rendered;
 }
 
+/**
+ * A `ui.custom` that shows the real prompt and answers it from the other side of the
+ * remote-answer door, for tests about what the tool emits rather than what it renders.
+ */
+function answeredFromAnotherExtension(answer: PromptAnswer) {
+   return async (factory: unknown) =>
+      new Promise<unknown>((resolve) => {
+         (factory as (tui: unknown, theme: unknown, keybindings: unknown, done: (value: unknown) => void) => unknown)(
+            { requestRender() { }, terminal: { rows: 40 } },
+            createTheme(),
+            createKeybindings(),
+            resolve,
+         );
+         // The prompt is published while the component is built, so it exists by now.
+         const open = [...getBridge().prompts].reverse().find((prompt) => !prompt.answered);
+         expect(open).toBeDefined();
+         getBridge().answer(open!.id, answer);
+      });
+}
+
 function renderSingleSelectFromFactory(factory: unknown, width = 120): string {
    // The custom UI callback is untyped in the test harness; narrow only the surface exercised here.
    const createComponent = factory as unknown as (
@@ -359,7 +380,7 @@ describe("ask_user", () => {
          { question: "Why?", options: [] },
          undefined,
          undefined,
-         { hasUI: true, ui: { input: async () => "Because" } },
+         { hasUI: true, ui: { custom: async () => ({ kind: "freeform", text: "Because" }) } },
       );
 
       expect(emittedEvents.filter((event) => event.name === "herdr:blocked")).toEqual([
@@ -411,7 +432,7 @@ describe("ask_user", () => {
          { question: "Why?", options: [] },
          undefined,
          undefined,
-         { hasUI: true, ui: { input: async () => undefined } },
+         { hasUI: true, ui: { custom: async () => null } },
       );
 
       expect(result.details.cancelled).toBe(true);
@@ -428,7 +449,7 @@ describe("ask_user", () => {
             { question: "Why?", context: "secret context", options: [] },
             undefined,
             undefined,
-            { hasUI: true, ui: { input: async () => "my private answer" } },
+            { hasUI: true, ui: { custom: async () => ({ kind: "freeform", text: "my private answer" }) } },
          );
       const cancelStructured = (tool: RegisteredTool) =>
          tool.execute(
@@ -3409,14 +3430,19 @@ describe("cancellation correctness", () => {
       expect(result.details.cancelled).toBe(true);
    });
 
+   const nonAnswers: { label: string; answer: PromptAnswer }[] = [
+      { label: "escape", answer: { cancel: true } },
+      { label: "empty submit", answer: { text: "" } },
+      { label: "whitespace submit", answer: { text: "   " } },
+   ];
    for (const fullEvents of [false, true]) {
-      for (const answer of [undefined, null, "", "   "]) {
-         test(`displayed freeform cancellation emits one ${fullEvents ? "full" : "redacted"} event: ${JSON.stringify(answer)}`, async () => {
+      for (const nonAnswer of nonAnswers) {
+         test(`displayed freeform cancellation emits one ${fullEvents ? "full" : "redacted"} event: ${nonAnswer.label}`, async () => {
             stubEnv("PI_ASK_USER_EMIT_FULL_EVENTS", String(fullEvents));
             const tool = await setupTool();
             const result = await tool.execute(
                "id", { question: "Why?", context: "private context" }, undefined, undefined,
-               { hasUI: true, ui: { input: async () => answer } },
+               { hasUI: true, ui: { custom: answeredFromAnotherExtension(nonAnswer.answer) } },
             );
             expect(result.details.cancelled).toBe(true);
             expect(emittedEvents.filter((event) => event.name.startsWith("ask:"))).toEqual([

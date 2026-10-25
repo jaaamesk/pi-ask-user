@@ -286,10 +286,11 @@ Each question of a multi-question call is published with its `page` (`{ index, t
 the call's heading, and reaching the review page publishes a review prompt that either
 submits or names a question to redo, because a phone has no tabs to flip back through.
 
-What is **not** covered: a question with no options. That call opens pi's own input dialog
-instead of this component, and no extension outside pi can answer it, so it stays a
-keyboard-only question. `bridge.ts` carries the table of what can be answered, and
-`bridge.test.ts` proves it against the real prompt component.
+A question with no options is covered too, as of this fork: it used to open pi's own input
+dialog, which nothing outside pi can answer, and it now opens the same editor a batch already
+uses for an option-less question. Hosts with no custom UI still get pi's dialog.
+`bridge.ts` carries the table of what can be answered, and `bridge.test.ts` proves each row
+against the real prompt component.
 
 ## Known limitations
 

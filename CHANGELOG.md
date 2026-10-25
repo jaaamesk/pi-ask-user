@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- A single question with no options opens the same freeform editor a batch already uses for an option-less question, instead of pi's plain input dialog. It is a prompt like any other now: its context and help line are shown, `Enter` submits, `Escape` cancels, and it can be answered from the other side of the bridge. Hosts with no custom UI are unchanged and still get pi's dialog. Where the fallback dialog runs with no options it asks directly rather than opening a menu with one entry in it.
+
 ### Added
 
 - The open prompt is published on a `globalThis` registry (`Symbol.for("pi.prompt-bridge.v1")`, in `bridge.ts`) together with a settle function that runs the same handlers `Enter` runs, so another extension in the same Pi process can answer it from elsewhere: a phone through Discord, say. Nothing is answered, cancelled, or timed out by the bridge itself, and the prompt component stays the single source of truth, so answering at the desk works unchanged whether or not anything is listening. Each question of a 2-4 question call is published as its own prompt with its position, and reaching the review page publishes a review prompt that submits or names a question to redo. A question with no options is not covered: that call opens pi's own input dialog rather than this component, and no outsider can answer it.
